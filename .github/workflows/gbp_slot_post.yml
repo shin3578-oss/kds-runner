@@ -91,12 +91,9 @@ jobs:
           GITHUB_PAT:              ${{ secrets.YT_TRIGGER_PAT }}
           MASK_NAMES:              ${{ secrets.MASK_NAMES }}
         run: |
-          set -o pipefail
-          xvfb-run python -u gbp_slot_post.py \
-            ${{ inputs.target_date }} \
-            ${{ inputs.preview == 'true' && '--preview' || '' }} \
-            ${{ inputs.no_notify == 'true' && '--no-notify' || '' }} \
-            2>&1 | python ../runner/mask.py
+          set +e
+          xvfb-run python -u gbp_slot_post.py             ${{ inputs.target_date }}             ${{ inputs.preview == 'true' && '--preview' || '' }}             ${{ inputs.no_notify == 'true' && '--no-notify' || '' }}             > /tmp/step.log 2>&1
+          bash ../runner/emit.sh $? /tmp/step.log
 
       - name: 失敗した画面の証跡をアップロード
         if: failure()
