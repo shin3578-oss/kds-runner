@@ -7,8 +7,9 @@
 # ★このリポジトリは公開。**スクリプト本体は置いていない**。
 #   実行のたびに非公開リポジトリ apotool-automation を app/ に取り出して動かす。
 #   公開になるのは「どれをいつ動かすか」という段取りと、**マスク済みの実行ログ**だけ。
-#   出力は必ず `| python ../mask.py` を通すこと（カルテ番号・氏名・電話・メールを伏せる）。
-#   set -o pipefail を付けないと、スクリプトが失敗してもジョブが成功扱いになる。
+#   ★ログの出し方は runner/emit.sh に一本化してある。
+#     成功した回は**中身を公開しない**（1行だけ）。失敗した回だけ mask.py を通して出す。
+#     マスクだけに頼ると、名簿に無い新しいスタッフの名前が漏れるため二重にしている。
 # ==========================================================
 name: GBP空き枠投稿（翌日分）
 
@@ -88,6 +89,7 @@ jobs:
           LW_PRIVATE_KEY:          ${{ secrets.LW_PRIVATE_KEY }}
           LW_CLIENT_SECRET:        ${{ secrets.LW_CLIENT_SECRET }}
           GITHUB_PAT:              ${{ secrets.YT_TRIGGER_PAT }}
+          MASK_NAMES:              ${{ secrets.MASK_NAMES }}
         run: |
           set -o pipefail
           xvfb-run python -u gbp_slot_post.py \
@@ -121,9 +123,11 @@ jobs:
           GITHUB_PAT:           ${{ secrets.YT_TRIGGER_PAT }}
           LINE_OA_TOKEN:        ${{ secrets.LINE_OA_TOKEN }}
           DRIVE_TOKEN_JSON:     ${{ secrets.DRIVE_TOKEN_JSON }}
+          MASK_NAMES:           ${{ secrets.MASK_NAMES }}
         run: |
-          set -o pipefail
-          xvfb-run python -u gbp_mtg_notice.py 2>&1 | python ../runner/mask.py
+          set +e
+          xvfb-run python -u gbp_mtg_notice.py > /tmp/step.log 2>&1
+          bash ../runner/emit.sh $? /tmp/step.log
 
       # 短期集中治療 希望アラート（1日3回のうち14:30の回）。
       # 通知済みの印は訴求リストの⑤タブなので状態ファイルは持たない。
@@ -138,10 +142,12 @@ jobs:
           GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
           LW_PRIVATE_KEY:       ${{ secrets.LW_PRIVATE_KEY }}
           LW_CLIENT_SECRET:     ${{ secrets.LW_CLIENT_SECRET }}
+          MASK_NAMES:           ${{ secrets.MASK_NAMES }}
         run: |
-          set -o pipefail
+          set +e
           echo '${{ secrets.DRIVE_TOKEN_JSON }}' > /tmp/drive_token_tanki.json
-          python -u monshin_tanki_alert.py 2>&1 | python ../runner/mask.py
+          python -u monshin_tanki_alert.py > /tmp/step.log 2>&1
+          bash ../runner/emit.sh $? /tmp/step.log
 
       - name: 短期集中治療アラートの失敗をLINEワークスに通知
         if: steps.tanki_alert.outcome == 'failure'
