@@ -92,8 +92,24 @@ jobs:
           MASK_NAMES:              ${{ secrets.MASK_NAMES }}
         run: |
           set +e
-          xvfb-run python -u gbp_slot_post.py             ${{ inputs.target_date }}             ${{ inputs.preview == 'true' && '--preview' || '' }}             ${{ inputs.no_notify == 'true' && '--no-notify' || '' }}             > /tmp/step.log 2>&1
-          bash ../runner/emit.sh $? /tmp/step.log
+          run_once () {
+            xvfb-run python -u gbp_slot_post.py               ${{ inputs.target_date }}               ${{ inputs.preview == 'true' && '--preview' || '' }}               ${{ inputs.no_notify == 'true' && '--no-notify' || '' }}               > "$1" 2>&1
+          }
+          run_once /tmp/step.log
+          code=$?
+          # ── 二段目の保険（2026-09-08追加）──────────────────────────────
+          # 一時的な通信エラーでアポツール側の処理中に落ちることがある
+          # （例: net::ERR_ABORTED）。**投稿する手前で落ちた回だけ**、90秒待って
+          # 1回だけやり直す。「投稿内容プレビュー」が出ていない＝GBPにも公式LINEにも
+          # 何も出していない、と確実に言えるので、二重投稿にはならない。
+          if [ $code -ne 0 ] && ! grep -q "プレビュー" /tmp/step.log; then
+            echo "▲ 投稿する前に落ちたため、90秒待って1回だけやり直します" >> /tmp/step.log
+            sleep 90
+            run_once /tmp/retry.log
+            code=$?
+            cat /tmp/retry.log >> /tmp/step.log
+          fi
+          bash ../runner/emit.sh $code /tmp/step.log
 
       - name: 失敗した画面の証跡をアップロード
         if: failure()
