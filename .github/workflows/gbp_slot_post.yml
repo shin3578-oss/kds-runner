@@ -1,0 +1,202 @@
+# ==========================================================
+# 【何をする】Googleビジネスプロフィールに翌日の空き枠を自動投稿
+#            ＋同じ空き枠を公式LINE「予約空き情報」（@902nutdg）へ「明日の空き情報」として配信
+#            （2026-09-09 院長指示「翌日の空き情報を15時に配信したい」。LINEが先・GBPが後）
+# 【いつ動く】日〜金 15:00｜Cron-job.org「GBP空き枠自動投稿」ジョブが起動（2026-09-09に14:30→15:00へ）
+#            （翌日分を投稿するため、翌日が休診日=日曜になる土曜は動かない）
+# 【同梱】gbp_mtg_notice.py（全体MTGの3日前お知らせ）／短期集中治療 希望アラート
+# 【検証のしかた】preview=true だけだとLINEは本当に配信されるので、必ず aki_dry_run=true も一緒に付ける
+#
+# ★このリポジトリは公開。**スクリプト本体は置いていない**。
+#   実行のたびに非公開リポジトリ apotool-automation を app/ に取り出して動かす。
+#   公開になるのは「どれをいつ動かすか」という段取りと、**マスク済みの実行ログ**だけ。
+#   ★ログの出し方は runner/emit.sh に一本化してある。
+#     成功した回は**中身を公開しない**（1行だけ）。失敗した回だけ mask.py を通して出す。
+#     マスクだけに頼ると、名簿に無い新しいスタッフの名前が漏れるため二重にしている。
+# ==========================================================
+name: GBP空き枠投稿（翌日分）
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_date:
+        description: '対象日（YYYY-MM-DD形式。空欄=翌日）'
+        required: false
+      preview:
+        description: 'プレビューのみ（投稿しない）: true/false'
+        required: false
+        default: 'false'
+      no_notify:
+        description: '検証用・院長DMに通知を飛ばさない: true/false'
+        required: false
+        default: 'false'
+      skip_tanki:
+        description: '短期集中治療アラートを飛ばす（検証用）: true/false'
+        required: false
+        default: 'false'
+      aki_dry_run:
+        description: '公式LINE「予約空き情報」への翌日分配信を検証モードに（文面生成とトークン確認のみ・配信しない）: true/false'
+        required: false
+        default: 'false'
+
+jobs:
+  gbp-post:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+        working-directory: app
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+      # クッキーが切れて取り直したとき、書き戻す先を**このリポジトリ**にする。
+      # 読んでいるSecretsと書き戻し先がズレると毎回クッキー切れになるため。
+      SECRETS_REPO: shin3578-oss/kds-runner
+
+    steps:
+      # 1本目＝このリポジトリ（mask.py を使う）。2本目＝中身の入った非公開リポジトリ。
+      - uses: actions/checkout@v4
+        with:
+          path: runner
+      - uses: actions/checkout@v4
+        with:
+          repository: shin3578-oss/apotool-automation
+          token: ${{ secrets.APOTOOL_PAT }}
+          path: app
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: 依存パッケージインストール
+        run: pip install -r requirements.txt
+
+      # Playwrightのブラウザ本体（約170MB）を使い回してActionsの時間を節約する
+      - name: Playwrightブラウザのキャッシュ
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ms-playwright-chromium-${{ runner.os }}-v1
+
+      - name: Playwrightブラウザをインストール
+        run: |
+          playwright install chromium
+          sudo apt-get install -y xvfb
+
+      - name: GBP空き枠投稿
+        env:
+          APOTOOL_EMAIL:           ${{ secrets.APOTOOL_EMAIL }}
+          APOTOOL_PASSWORD:        ${{ secrets.APOTOOL_PASSWORD }}
+          GOOGLE_GBP_COOKIES:      ${{ secrets.GOOGLE_GBP_COOKIES }}
+          GOOGLE_CREDENTIALS_JSON: ${{ secrets.GOOGLE_CREDENTIALS_JSON }}
+          GOOGLE_GBP_PASSWORD:     ${{ secrets.GOOGLE_GBP_PASSWORD }}
+          GOOGLE_GBP_EMAIL:        ${{ secrets.GOOGLE_GBP_EMAIL }}
+          GOOGLE_CLIENT_ID:        ${{ secrets.GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET:    ${{ secrets.GOOGLE_CLIENT_SECRET }}
+          GBP_REFRESH_TOKEN:       ${{ secrets.GBP_REFRESH_TOKEN }}
+          LW_PRIVATE_KEY:          ${{ secrets.LW_PRIVATE_KEY }}
+          LW_CLIENT_SECRET:        ${{ secrets.LW_CLIENT_SECRET }}
+          GITHUB_PAT:              ${{ secrets.YT_TRIGGER_PAT }}
+          MASK_NAMES:              ${{ secrets.MASK_NAMES }}
+          # 公式LINE「予約空き情報」（@902nutdg）へ翌日の空きを同じ実行で配信（2026-09-09）
+          LINE_OA_TOKEN_AKI:       ${{ secrets.LINE_OA_TOKEN_AKI }}
+        run: |
+          set +e
+          run_once () {
+            xvfb-run python -u gbp_slot_post.py               ${{ inputs.target_date }}               ${{ inputs.preview == 'true' && '--preview' || '' }}               ${{ inputs.no_notify == 'true' && '--no-notify' || '' }}               --with-aki-tomorrow ${{ inputs.aki_dry_run == 'true' && '--aki-dry-run' || '' }}               > "$1" 2>&1
+          }
+          run_once /tmp/step.log
+          code=$?
+          # ── 二段目の保険（2026-09-08追加）──────────────────────────────
+          # 一時的な通信エラーでアポツール側の処理中に落ちることがある
+          # （例: net::ERR_ABORTED）。**投稿する手前で落ちた回だけ**、90秒待って
+          # 1回だけやり直す。「プレビュー」が出ていない＝GBPにも公式LINE（予約空き情報の
+          # 翌日分も含む。配信の直前に「配信文プレビュー」を出す）にも何も出していない、
+          # と確実に言えるので、二重投稿・二重配信にはならない。
+          if [ $code -ne 0 ] && ! grep -q "プレビュー" /tmp/step.log; then
+            echo "▲ 投稿する前に落ちたため、90秒待って1回だけやり直します" >> /tmp/step.log
+            sleep 90
+            run_once /tmp/retry.log
+            code=$?
+            cat /tmp/retry.log >> /tmp/step.log
+          fi
+          bash ../runner/emit.sh $code /tmp/step.log
+
+      - name: 失敗した画面の証跡をアップロード
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: login-failure-gbp-slot-post
+          path: app/login_failure/
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: 全体MTGお知らせ（3日前・GBP＋公式LINE）
+        if: ${{ inputs.preview != 'true' }}
+        env:
+          APOTOOL_EMAIL:        ${{ secrets.APOTOOL_EMAIL }}
+          APOTOOL_PASSWORD:     ${{ secrets.APOTOOL_PASSWORD }}
+          GOOGLE_GBP_COOKIES:   ${{ secrets.GOOGLE_GBP_COOKIES }}
+          GOOGLE_GBP_PASSWORD:  ${{ secrets.GOOGLE_GBP_PASSWORD }}
+          GOOGLE_GBP_EMAIL:     ${{ secrets.GOOGLE_GBP_EMAIL }}
+          GBP_REFRESH_TOKEN:    ${{ secrets.GBP_REFRESH_TOKEN }}
+          GOOGLE_CLIENT_ID:     ${{ secrets.GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+          LW_PRIVATE_KEY:       ${{ secrets.LW_PRIVATE_KEY }}
+          LW_CLIENT_SECRET:     ${{ secrets.LW_CLIENT_SECRET }}
+          GITHUB_PAT:           ${{ secrets.YT_TRIGGER_PAT }}
+          LINE_OA_TOKEN:        ${{ secrets.LINE_OA_TOKEN }}
+          DRIVE_TOKEN_JSON:     ${{ secrets.DRIVE_TOKEN_JSON }}
+          MASK_NAMES:           ${{ secrets.MASK_NAMES }}
+        run: |
+          set +e
+          xvfb-run python -u gbp_mtg_notice.py > /tmp/step.log 2>&1
+          bash ../runner/emit.sh $? /tmp/step.log
+
+      # 短期集中治療 希望アラート（1日3回のうち14:30の回）。
+      # 通知済みの印は訴求リストの⑤タブなので状態ファイルは持たない。
+      # 送り先は院長DM＋斉藤さんDMの2人だけ（チャンネルには出さない）。
+      - name: 短期集中治療 希望アラート（問診票の新規回答）
+        id: tanki_alert
+        if: ${{ always() && inputs.skip_tanki != 'true' }}
+        continue-on-error: true
+        env:
+          DRIVE_TOKEN_PATH:     /tmp/drive_token_tanki.json
+          GOOGLE_CLIENT_ID:     ${{ secrets.GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+          LW_PRIVATE_KEY:       ${{ secrets.LW_PRIVATE_KEY }}
+          LW_CLIENT_SECRET:     ${{ secrets.LW_CLIENT_SECRET }}
+          MASK_NAMES:           ${{ secrets.MASK_NAMES }}
+        run: |
+          set +e
+          echo '${{ secrets.DRIVE_TOKEN_JSON }}' > /tmp/drive_token_tanki.json
+          python -u monshin_tanki_alert.py > /tmp/step.log 2>&1
+          bash ../runner/emit.sh $? /tmp/step.log
+
+      - name: 短期集中治療アラートの失敗をLINEワークスに通知
+        if: steps.tanki_alert.outcome == 'failure'
+        env:
+          LW_PRIVATE_KEY:   ${{ secrets.LW_PRIVATE_KEY }}
+          LW_CLIENT_SECRET: ${{ secrets.LW_CLIENT_SECRET }}
+          NOTIFY_MESSAGE:   "❌ 短期集中治療 希望アラート 失敗 — GitHub Actions でログを確認してください"
+          NOTIFY_BOT_ID: "12789558"  # 失敗通知Bot
+        run: python lw_notify.py
+
+      # 投稿済みマーカーは apotool-automation 側に持ち帰る（checkout時のPATで push できる）
+      - name: 投稿済みマーカー等をコミット
+        if: ${{ always() && inputs.preview != 'true' }}
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+          git add gbp_mtg_announced.txt line_mtg_announced.txt gbp_pending_post.txt 2>/dev/null || true
+          git diff --staged --quiet || git commit -m "GBP state update $(date '+%Y-%m-%d')"
+          git pull --rebase --autostash 2>/dev/null || true
+          git push || true
+
+      - name: 実行結果をLINEワークスに通知
+        if: failure()
+        env:
+          LW_PRIVATE_KEY: ${{ secrets.LW_PRIVATE_KEY }}
+          LW_CLIENT_SECRET: ${{ secrets.LW_CLIENT_SECRET }}
+          NOTIFY_MESSAGE: "❌ GBP空き枠投稿 失敗（kds-runner） — GitHub Actions でログを確認してください"
+          NOTIFY_BOT_ID: "12789558"  # 失敗通知Bot
+        run: python lw_notify.py
