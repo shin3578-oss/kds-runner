@@ -187,10 +187,20 @@ jobs:
         run: |
           git config user.name "github-actions"
           git config user.email "github-actions@github.com"
-          git add gbp_mtg_announced.txt line_mtg_announced.txt gbp_pending_post.txt 2>/dev/null || true
-          git diff --staged --quiet || git commit -m "GBP state update $(date '+%Y-%m-%d')"
-          git pull --rebase --autostash 2>/dev/null || true
-          git push || true
+          # ★2026-09-14 事故: 無くなったファイル名（gbp_pending_post.txt）が混ざっていたため git add が
+          #   3ファイルまとめて失敗し、「投稿済み」の印が毎回捨てられて公式LINEへ2日連続で同じお知らせが出た。
+          #   → あるファイルだけ1つずつ add する。push に失敗したら赤で終える（印が残らない＝翌日また配信されるため）。
+          for f in gbp_mtg_announced.txt line_mtg_announced.txt gbp_pending_post.txt; do
+            if [ -f "$f" ]; then git add -- "$f"; fi
+          done
+          if git diff --staged --quiet; then
+            echo "マーカーに変更なし（コミットしない）"
+            exit 0
+          fi
+          git commit -m "GBP state update $(date '+%Y-%m-%d')"
+          git pull --rebase --autostash
+          git push
+          echo "マーカーを保存しました: $(git log -1 --format=%h)"
 
       - name: 実行結果をLINEワークスに通知
         if: failure()
