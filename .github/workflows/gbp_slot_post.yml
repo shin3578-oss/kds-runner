@@ -160,6 +160,8 @@ jobs:
         if: ${{ always() && inputs.skip_tanki != 'true' }}
         continue-on-error: true
         env:
+          APOTOOL_EMAIL:        ${{ secrets.APOTOOL_EMAIL }}
+          APOTOOL_PASSWORD:     ${{ secrets.APOTOOL_PASSWORD }}
           DRIVE_TOKEN_PATH:     /tmp/drive_token_tanki.json
           GOOGLE_CLIENT_ID:     ${{ secrets.GOOGLE_CLIENT_ID }}
           GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
