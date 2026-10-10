@@ -4,6 +4,7 @@
 #            （2026-09-09 院長指示「翌日の空き情報を15時に配信したい」。LINEが先・GBPが後）
 #            ＋同じ空き枠で「予約の空き状況」ページ（shin3578-oss/oval-aki の data.json）を書き換える
 #            （2026-10-10 院長指示。メインの公式LINEのリッチメニューから開く＝通知が鳴らずブロックされない）
+#            ＋その先の診療日3日分もページへ書き足す（aki_page_ahead.py・2026-10-11 院長「3日間出して」）
 # 【いつ動く】日〜金 15:00｜Cron-job.org「GBP空き枠自動投稿」ジョブが起動（2026-09-09に14:30→15:00へ）
 #            （翌日分を投稿するため、翌日が休診日=日曜になる土曜は動かない）
 # 【同梱】gbp_mtg_notice.py（全体MTGの3日前お知らせ）／短期集中治療 希望アラート
@@ -133,6 +134,38 @@ jobs:
           path: app/login_failure/
           if-no-files-found: ignore
           retention-days: 14
+
+      # 空き枠ページは「診療日3日分」を出す（2026-10-11 院長「3日間出して」）。
+      # 上の本番の回は翌日分だけなので、その先の診療日3日分をここで書き足す（配信・投稿・院長DMはしない）。
+      # 失敗しても後のステップは止めず、専用の一文で失敗通知Botへ。
+      - name: 空き枠ページ（2日後以降の診療日3日分）
+        id: aki_ahead
+        if: ${{ always() && inputs.preview != 'true' }}
+        continue-on-error: true
+        env:
+          APOTOOL_EMAIL:    ${{ secrets.APOTOOL_EMAIL }}
+          APOTOOL_PASSWORD: ${{ secrets.APOTOOL_PASSWORD }}
+          LW_PRIVATE_KEY:   ${{ secrets.LW_PRIVATE_KEY }}
+          LW_CLIENT_SECRET: ${{ secrets.LW_CLIENT_SECRET }}
+          AKI_PAGE_PAT:     ${{ secrets.AKI_PAGE_PAT }}
+          MASK_NAMES:       ${{ secrets.MASK_NAMES }}
+          # 休診チェックの「GBP特別営業時間」を本番の回と同じく使うため
+          GOOGLE_CLIENT_ID:     ${{ secrets.GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+          GBP_REFRESH_TOKEN:    ${{ secrets.GBP_REFRESH_TOKEN }}
+        run: |
+          set +e
+          python -u aki_page_ahead.py ${{ inputs.target_date }} ${{ inputs.aki_dry_run == 'true' && '--aki-dry-run' || '' }} > /tmp/step.log 2>&1
+          bash ../runner/emit.sh $? /tmp/step.log
+
+      - name: 空き枠ページの失敗をLINEワークスに通知
+        if: steps.aki_ahead.outcome == 'failure'
+        env:
+          LW_PRIVATE_KEY:   ${{ secrets.LW_PRIVATE_KEY }}
+          LW_CLIENT_SECRET: ${{ secrets.LW_CLIENT_SECRET }}
+          NOTIFY_MESSAGE:   "❌ 空き枠ページ（2日後以降）の書き込み失敗 — GitHub Actions でログを確認してください"
+          NOTIFY_BOT_ID: "12789558"  # 失敗通知Bot
+        run: python lw_notify.py
 
       - name: 全体MTGお知らせ（3日前・GBP＋公式LINE）
         if: ${{ inputs.preview != 'true' }}
