@@ -2,6 +2,8 @@
 # 【何をする】Googleビジネスプロフィールに翌日の空き枠を自動投稿
 #            ＋同じ空き枠を公式LINE「予約空き情報」（@902nutdg）へ「明日の空き情報」として配信
 #            （2026-09-09 院長指示「翌日の空き情報を15時に配信したい」。LINEが先・GBPが後）
+#            ＋同じ空き枠で「予約の空き状況」ページ（shin3578-oss/oval-aki の data.json）を書き換える
+#            （2026-10-10 院長指示。メインの公式LINEのリッチメニューから開く＝通知が鳴らずブロックされない）
 # 【いつ動く】日〜金 15:00｜Cron-job.org「GBP空き枠自動投稿」ジョブが起動（2026-09-09に14:30→15:00へ）
 #            （翌日分を投稿するため、翌日が休診日=日曜になる土曜は動かない）
 # 【同梱】gbp_mtg_notice.py（全体MTGの3日前お知らせ）／短期集中治療 希望アラート
@@ -99,6 +101,8 @@ jobs:
           MASK_NAMES:              ${{ secrets.MASK_NAMES }}
           # 公式LINE「予約空き情報」（@902nutdg）へ翌日の空きを同じ実行で配信（2026-09-09）
           LINE_OA_TOKEN_AKI:       ${{ secrets.LINE_OA_TOKEN_AKI }}
+          # 空き枠ページ（https://shin3578-oss.github.io/oval-aki/）の data.json を書き換える（2026-10-10）
+          AKI_PAGE_PAT:            ${{ secrets.AKI_PAGE_PAT }}
         run: |
           set +e
           run_once () {
