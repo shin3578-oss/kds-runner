@@ -7,7 +7,7 @@
 #            ＋その先の診療日3日分もページへ書き足す（aki_page_ahead.py・2026-10-11 院長「3日間出して」）
 # 【いつ動く】日〜金 15:00｜Cron-job.org「GBP空き枠自動投稿」ジョブが起動（2026-09-09に14:30→15:00へ）
 #            （翌日分を投稿するため、翌日が休診日=日曜になる土曜は動かない）
-# 【同梱】gbp_mtg_notice.py（全体MTGの3日前お知らせ）／短期集中治療 希望アラート
+# 【同梱】gbp_mtg_notice.py（全体MTGの3日前お知らせ）／短期集中治療 希望アラート／公式LINE 来月の題（毎月20日・line_oa_topic.py）
 # 【検証のしかた】preview=true だけだとLINEは本当に配信されるので、必ず aki_dry_run=true も一緒に付ける
 #
 # ★このリポジトリは公開。**スクリプト本体は置いていない**。
@@ -189,6 +189,33 @@ jobs:
           xvfb-run python -u gbp_mtg_notice.py > /tmp/step.log 2>&1
           bash ../runner/emit.sh $? /tmp/step.log
 
+      # 公式LINE（メイン）月1回の来院案内：来月の題を院長DMへ（2026-10-13 院長指示）。
+      # 毎月20日以降の最初の実行で1回だけ送る（送った月は app/line_oa_topic_notified.txt に残し、下のマーカーコミットで保存）。
+      # 文面づくりはClaude Codeのセッションで行う（AIのAPIは使わない）。数秒なのでジョブは分けない。
+      - name: 公式LINE 来月の題を知らせる（毎月20日）
+        id: line_topic
+        if: ${{ always() && inputs.preview != 'true' }}
+        continue-on-error: true
+        env:
+          LW_PRIVATE_KEY:   ${{ secrets.LW_PRIVATE_KEY }}
+          LW_CLIENT_SECRET: ${{ secrets.LW_CLIENT_SECRET }}
+          LINE_OA_TOKEN:    ${{ secrets.LINE_OA_TOKEN }}
+          NO_NOTIFY:        ${{ inputs.no_notify }}
+          MASK_NAMES:       ${{ secrets.MASK_NAMES }}
+        run: |
+          set +e
+          python -u line_oa_topic.py > /tmp/step.log 2>&1
+          bash ../runner/emit.sh $? /tmp/step.log
+
+      - name: 公式LINE 来月の題の失敗をLINEワークスに通知
+        if: steps.line_topic.outcome == 'failure'
+        env:
+          LW_PRIVATE_KEY:   ${{ secrets.LW_PRIVATE_KEY }}
+          LW_CLIENT_SECRET: ${{ secrets.LW_CLIENT_SECRET }}
+          NOTIFY_MESSAGE:   "❌ 公式LINE 来月の題 失敗 — GitHub Actions でログを確認してください"
+          NOTIFY_BOT_ID: "12789558"  # 失敗通知Bot
+        run: python lw_notify.py
+
       # 短期集中治療 希望アラート（1日3回のうち14:30の回）。
       # 通知済みの印は訴求リストの⑤タブなので状態ファイルは持たない。
       # 送り先は院長DM＋斉藤さんDMの2人だけ（チャンネルには出さない）。
@@ -229,7 +256,7 @@ jobs:
           # ★2026-09-14 事故: 無くなったファイル名（gbp_pending_post.txt）が混ざっていたため git add が
           #   3ファイルまとめて失敗し、「投稿済み」の印が毎回捨てられて公式LINEへ2日連続で同じお知らせが出た。
           #   → あるファイルだけ1つずつ add する。push に失敗したら赤で終える（印が残らない＝翌日また配信されるため）。
-          for f in gbp_mtg_announced.txt line_mtg_announced.txt gbp_pending_post.txt; do
+          for f in gbp_mtg_announced.txt line_mtg_announced.txt gbp_pending_post.txt line_oa_topic_notified.txt; do
             if [ -f "$f" ]; then git add -- "$f"; fi
           done
           if git diff --staged --quiet; then
