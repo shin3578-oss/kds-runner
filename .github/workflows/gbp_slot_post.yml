@@ -8,6 +8,7 @@
 # 【いつ動く】日〜金 15:00｜Cron-job.org「GBP空き枠自動投稿」ジョブが起動（2026-09-09に14:30→15:00へ）
 #            （翌日分を投稿するため、翌日が休診日=日曜になる土曜は動かない）
 # 【同梱】gbp_mtg_notice.py（全体MTGの3日前お知らせ）／短期集中治療 希望アラート／公式LINE 来月の題（毎月20日・line_oa_topic.py）
+#        ／空き枠をXへも（Buffer経由）／ブログ新着をX・Facebookへ紹介（blog_sns_post.py）
 # 【検証のしかた】preview=true だけだとLINEは本当に配信されるので、必ず aki_dry_run=true も一緒に付ける
 #
 # ★このリポジトリは公開。**スクリプト本体は置いていない**。
@@ -104,6 +105,10 @@ jobs:
           LINE_OA_TOKEN_AKI:       ${{ secrets.LINE_OA_TOKEN_AKI }}
           # 空き枠ページ（https://shin3578-oss.github.io/oval-aki/）の data.json を書き換える（2026-10-10）
           AKI_PAGE_PAT:            ${{ secrets.AKI_PAGE_PAT }}
+          # 同じ空きを X へ（Buffer経由・無料。2026-10-13 院長指示）。未登録なら投稿しないだけ
+          BUFFER_API_KEY:          ${{ secrets.BUFFER_API_KEY }}
+          BUFFER_CHANNEL_TWITTER: ${{ secrets.BUFFER_CHANNEL_TWITTER }}
+          BUFFER_CHANNEL_FACEBOOK: ${{ secrets.BUFFER_CHANNEL_FACEBOOK }}
         run: |
           set +e
           run_once () {
@@ -216,6 +221,34 @@ jobs:
           NOTIFY_BOT_ID: "12789558"  # 失敗通知Bot
         run: python lw_notify.py
 
+      # 医院HPのブログ新着（歯の豆知識・症例集など）を X・Facebook へ紹介（Buffer経由・無料。2026-10-13 院長指示）。
+      # 紹介済みの印は app/blog_sns_posted.json（下のマーカーコミットで保存）。数秒なのでジョブは分けない。
+      - name: ブログ新着をSNSへ紹介（X・Facebook）
+        id: blog_sns
+        if: ${{ always() && inputs.preview != 'true' }}
+        continue-on-error: true
+        env:
+          BUFFER_API_KEY:   ${{ secrets.BUFFER_API_KEY }}
+          BUFFER_CHANNEL_TWITTER: ${{ secrets.BUFFER_CHANNEL_TWITTER }}
+          BUFFER_CHANNEL_FACEBOOK: ${{ secrets.BUFFER_CHANNEL_FACEBOOK }}
+          LW_PRIVATE_KEY:   ${{ secrets.LW_PRIVATE_KEY }}
+          LW_CLIENT_SECRET: ${{ secrets.LW_CLIENT_SECRET }}
+          NO_NOTIFY:        ${{ inputs.no_notify }}
+          MASK_NAMES:       ${{ secrets.MASK_NAMES }}
+        run: |
+          set +e
+          python -u blog_sns_post.py > /tmp/step.log 2>&1
+          bash ../runner/emit.sh $? /tmp/step.log
+
+      - name: ブログ新着SNS紹介の失敗をLINEワークスに通知
+        if: steps.blog_sns.outcome == 'failure'
+        env:
+          LW_PRIVATE_KEY:   ${{ secrets.LW_PRIVATE_KEY }}
+          LW_CLIENT_SECRET: ${{ secrets.LW_CLIENT_SECRET }}
+          NOTIFY_MESSAGE:   "❌ ブログ新着のSNS紹介 失敗 — GitHub Actions でログを確認してください"
+          NOTIFY_BOT_ID: "12789558"  # 失敗通知Bot
+        run: python lw_notify.py
+
       # 短期集中治療 希望アラート（1日3回のうち14:30の回）。
       # 通知済みの印は訴求リストの⑤タブなので状態ファイルは持たない。
       # 送り先は院長DM＋斉藤さんDMの2人だけ（チャンネルには出さない）。
@@ -256,7 +289,7 @@ jobs:
           # ★2026-09-14 事故: 無くなったファイル名（gbp_pending_post.txt）が混ざっていたため git add が
           #   3ファイルまとめて失敗し、「投稿済み」の印が毎回捨てられて公式LINEへ2日連続で同じお知らせが出た。
           #   → あるファイルだけ1つずつ add する。push に失敗したら赤で終える（印が残らない＝翌日また配信されるため）。
-          for f in gbp_mtg_announced.txt line_mtg_announced.txt gbp_pending_post.txt line_oa_topic_notified.txt; do
+          for f in gbp_mtg_announced.txt line_mtg_announced.txt gbp_pending_post.txt line_oa_topic_notified.txt blog_sns_posted.json; do
             if [ -f "$f" ]; then git add -- "$f"; fi
           done
           if git diff --staged --quiet; then
