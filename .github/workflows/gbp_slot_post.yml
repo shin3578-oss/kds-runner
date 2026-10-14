@@ -4,6 +4,7 @@
 #            （2026-09-09 院長指示「翌日の空き情報を15時に配信したい」。LINEが先・GBPが後）
 #            ＋同じ空き枠で「予約の空き状況」ページ（shin3578-oss/oval-aki の data.json）を書き換える
 #            （2026-10-10 院長指示。メインの公式LINEのリッチメニューから開く＝通知が鳴らずブロックされない）
+#            ＋衛生士ごとの空きを公式LINEの検診予約（同意書控えGAS）へ送る（aki_page_publish.py・2026-10-15。公開ページには載せない）
 #            ＋その先30日分もページのデータへ書き足す（aki_page_ahead.py。ページの表示は診療日3日分のまま。
 #              30日分は公式LINEの自動応答がキャンセル時の次回予約案内に使う・2026-10-13）
 # 【いつ動く】日〜金 15:00｜Cron-job.org「GBP空き枠自動投稿」ジョブが起動（2026-09-09に14:30→15:00へ）
@@ -106,6 +107,8 @@ jobs:
           LINE_OA_TOKEN_AKI:       ${{ secrets.LINE_OA_TOKEN_AKI }}
           # 空き枠ページ（https://shin3578-oss.github.io/oval-aki/）の data.json を書き換える（2026-10-10）
           AKI_PAGE_PAT:            ${{ secrets.AKI_PAGE_PAT }}
+          YOYAKU_SYNC_URL:         ${{ secrets.YOYAKU_SYNC_URL }}   # 衛生士別の空きを公式LINEの検診予約（同意書控えGAS）へ
+          YOYAKU_SYNC_KEY:         ${{ secrets.YOYAKU_SYNC_KEY }}
           # 同じ空きを X へ（Buffer経由・無料。2026-10-13 院長指示）。未登録なら投稿しないだけ
           BUFFER_API_KEY:          ${{ secrets.BUFFER_API_KEY }}
           BUFFER_CHANNEL_TWITTER: ${{ secrets.BUFFER_CHANNEL_TWITTER }}
@@ -154,6 +157,8 @@ jobs:
           LW_PRIVATE_KEY:   ${{ secrets.LW_PRIVATE_KEY }}
           LW_CLIENT_SECRET: ${{ secrets.LW_CLIENT_SECRET }}
           AKI_PAGE_PAT:     ${{ secrets.AKI_PAGE_PAT }}
+          YOYAKU_SYNC_URL:  ${{ secrets.YOYAKU_SYNC_URL }}
+          YOYAKU_SYNC_KEY:  ${{ secrets.YOYAKU_SYNC_KEY }}
           MASK_NAMES:       ${{ secrets.MASK_NAMES }}
           # 休診チェックの「GBP特別営業時間」を本番の回と同じく使うため
           GOOGLE_CLIENT_ID:     ${{ secrets.GOOGLE_CLIENT_ID }}
@@ -169,7 +174,7 @@ jobs:
         env:
           LW_PRIVATE_KEY:   ${{ secrets.LW_PRIVATE_KEY }}
           LW_CLIENT_SECRET: ${{ secrets.LW_CLIENT_SECRET }}
-          NOTIFY_MESSAGE:   "❌ 空き枠ページ（2日後〜30日先）で計算できない日があった（その日は前回の空きのまま・他の日は更新済み）— GitHub Actions でログを確認してください"
+          NOTIFY_MESSAGE:   "❌ 空き枠ページ（2日後〜30日先）で計算できない日があった（その日は前回の空きのまま・他の日は更新済み）か、衛生士別の空き（公式LINEの検診予約用）をGASへ送れなかった — GitHub Actions でログを確認してください"
           NOTIFY_BOT_ID: "12789558"  # 失敗通知Bot
         run: python lw_notify.py
 
