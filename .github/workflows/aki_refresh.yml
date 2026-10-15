@@ -21,6 +21,10 @@ on:
         description: '検証用：失敗の通知を飛ばさない: true/false'
         required: false
         default: 'false'
+      stamp:
+        description: '空き枠ページの「◯時点」に出す時刻（起動元 spt_alert.yml の開始時刻。空欄＝このジョブの開始時刻）'
+        required: false
+        default: ''
 
 concurrency:
   group: aki-refresh
@@ -45,6 +49,12 @@ jobs:
           repository: shin3578-oss/apotool-automation
           token: ${{ secrets.APOTOOL_PAT }}
           path: app
+
+      # 「予約の空き状況」ページの「◯時点の空き」を朝の起動（8:30）の時刻でそろえる（aki_page_publish.py が30分単位に切り下げる）
+      - name: 起動時刻を記録（空き枠ページの時点表示用）
+        env:
+          STAMP: ${{ inputs.stamp }}
+        run: echo "AKI_STAMP=${STAMP:-$(TZ=Asia/Tokyo date +%FT%H:%M:%S+09:00)}" >> "$GITHUB_ENV"
 
       - uses: actions/setup-python@v5
         with:

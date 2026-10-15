@@ -69,6 +69,10 @@ jobs:
           token: ${{ secrets.APOTOOL_PAT }}
           path: app
 
+      # 「予約の空き状況」ページの「◯時点の空き」を、この起動の時刻（30分単位に切り下げ）でそろえる（aki_page_publish.py）
+      - name: 起動時刻を記録（空き枠ページの時点表示用）
+        run: echo "AKI_STAMP=$(TZ=Asia/Tokyo date +%FT%H:%M:%S+09:00)" >> "$GITHUB_ENV"
+
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
