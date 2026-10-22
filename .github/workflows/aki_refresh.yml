@@ -1,12 +1,10 @@
 # ==========================================================
-# 【何をする】空き枠ページ（oval-aki の data.json）と公式LINEの検診予約（衛生士ごとの空き）を、
-#            翌日〜30日先まで朝に集め直す（aki_page_ahead.py）。GBP投稿・LINE配信・院長DMはしない
-#            （2026-10-15 院長「空き時間情報取得を2回に。8時半の時点で一回」「できたらフレッシュな情報がいい」）
-# 【いつ動く】月〜土 8:30ごろ｜apotool の spt_alert.yml（8:30・Cron-job.org）のステップから dispatch で起動
-#            （新しい cron は作らない。このリポジトリは公開＝Actionsの無料枠を使わない）
-#            当日分は同じ8:30の gbp_slot_post.py --ig-story が更新する。15:00 の gbp_slot_post.yml と合わせて1日2回
+# 【何をする】空き枠の集め直し（翌日〜30日先）の「中継」。本体は apotool-automation の aki_refresh.yml（非公開）へ移した。
+#            ここは受け取った入力をそのまま渡して本体を起動するだけ（数秒）
+# 【いつ動く】月〜土 12:30ごろ｜同意書控えGASの時刻起動 ykMiddayRefresh がここを dispatch する
+#            （GASの宛先を書き換えずに済むよう、ここを中継として残している・2026-10-22〜）
+#            朝8:30の回は apotool の spt_alert.yml が本体を直接起動する
 # 【同梱】なし
-# ★このリポジトリは公開。スクリプト本体は置いていない（apotool-automation をチェックアウトして動かす）
 # ==========================================================
 name: 空き枠の朝の集め直し（翌日〜30日先）
 
@@ -22,81 +20,26 @@ on:
         required: false
         default: 'false'
       stamp:
-        description: '空き枠ページの「◯時点」に出す時刻（起動元 spt_alert.yml の開始時刻。空欄＝このジョブの開始時刻）'
+        description: '空き枠ページの「◯時点」に出す時刻（空欄＝本体の開始時刻）'
         required: false
         default: ''
 
-concurrency:
-  group: aki-refresh
-  cancel-in-progress: false
-
 jobs:
-  aki-refresh:
+  relay:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
-    defaults:
-      run:
-        shell: bash
-        working-directory: app
-    env:
-      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+    timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
-        with:
-          path: runner
-      - uses: actions/checkout@v4
-        with:
-          repository: shin3578-oss/apotool-automation
-          token: ${{ secrets.APOTOOL_PAT }}
-          path: app
-
-      # 「予約の空き状況」ページの「◯時点の空き」を朝の起動（8:30）の時刻でそろえる（aki_page_publish.py が30分単位に切り下げる）
-      - name: 起動時刻を記録（空き枠ページの時点表示用）
+      - name: 本体（apotool-automation の aki_refresh.yml）を起動
         env:
-          STAMP: ${{ inputs.stamp }}
-        run: echo "AKI_STAMP=${STAMP:-$(TZ=Asia/Tokyo date +%FT%H:%M:%S+09:00)}" >> "$GITHUB_ENV"
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-
-      - name: 依存パッケージインストール
-        run: pip install -r requirements.txt
-
-      - name: Playwrightブラウザのキャッシュ
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/ms-playwright
-          key: ms-playwright-chromium-${{ runner.os }}-v1
-
-      - name: Playwrightブラウザをインストール
-        run: playwright install chromium
-
-      # 基準日＝今日（その翌日から30日先まで）。ログは公開されるので emit.sh で1行だけ出す
-      - name: 空き枠を集め直す（翌日〜30日先）
-        id: aki
-        env:
-          APOTOOL_EMAIL:    ${{ secrets.APOTOOL_EMAIL }}
-          APOTOOL_PASSWORD: ${{ secrets.APOTOOL_PASSWORD }}
-          LW_PRIVATE_KEY:   ${{ secrets.LW_PRIVATE_KEY }}
-          LW_CLIENT_SECRET: ${{ secrets.LW_CLIENT_SECRET }}
-          AKI_PAGE_PAT:     ${{ secrets.AKI_PAGE_PAT }}
-          YOYAKU_SYNC_URL:  ${{ secrets.YOYAKU_SYNC_URL }}
-          YOYAKU_SYNC_KEY:  ${{ secrets.YOYAKU_SYNC_KEY }}
-          MASK_NAMES:       ${{ secrets.MASK_NAMES }}
-          GOOGLE_CLIENT_ID:     ${{ secrets.GOOGLE_CLIENT_ID }}
-          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
-          GBP_REFRESH_TOKEN:    ${{ secrets.GBP_REFRESH_TOKEN }}
+          YT_TRIGGER_PAT: ${{ secrets.YT_TRIGGER_PAT }}
+          IN_DRY:   ${{ inputs.aki_dry_run }}
+          IN_NN:    ${{ inputs.no_notify }}
+          IN_STAMP: ${{ inputs.stamp }}
         run: |
-          set +e
-          python -u aki_page_ahead.py "$(TZ=Asia/Tokyo date +%F)" ${{ inputs.aki_dry_run == 'true' && '--aki-dry-run' || '' }} > /tmp/step.log 2>&1
-          bash ../runner/emit.sh $? /tmp/step.log
-
-      - name: 失敗をLINEワークスに通知
-        if: failure() && inputs.no_notify != 'true'
-        env:
-          LW_PRIVATE_KEY:   ${{ secrets.LW_PRIVATE_KEY }}
-          LW_CLIENT_SECRET: ${{ secrets.LW_CLIENT_SECRET }}
-          NOTIFY_MESSAGE:   "❌ 空き枠の朝の集め直し（翌日〜30日先）で計算できない日があったか、GASへ送れなかった（その日は前回＝前日15時の空きのまま）— GitHub Actions でログを確認してください"
-          NOTIFY_BOT_ID: "12789558"  # 失敗通知Bot
-        run: python lw_notify.py
+          BODY=$(python3 -c 'import json,os;print(json.dumps({"ref":"main","inputs":{"aki_dry_run":os.environ.get("IN_DRY") or "false","no_notify":os.environ.get("IN_NN") or "false","stamp":os.environ.get("IN_STAMP") or ""}}))')
+          CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
+            -H "Authorization: token $YT_TRIGGER_PAT" -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/shin3578-oss/apotool-automation/actions/workflows/aki_refresh.yml/dispatches" \
+            -d "$BODY")
+          echo "本体の起動: HTTP $CODE"
+          [ "$CODE" = "204" ]
