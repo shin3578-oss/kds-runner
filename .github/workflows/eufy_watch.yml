@@ -1,0 +1,98 @@
+# ==========================================================
+# 【何をする】101号室のお掃除ロボ（eufy Clean X10 Pro Omni）の見張り
+#            基地に戻っていない／充電できていない／エラー が出たら知らせる。毎朝、掃除されていない・途中で止まった日だけ知らせる
+#            （うまくいった日は出さない＝院長決定 2026-11-15）。本体は非公開リポジトリの apotool/eufy_watch.py
+# 【いつ動く】30分ごと｜cybozu-bot の bot.yml（Cron-job.org「サイボウズBot」30分ごと）の最後のステップがここを起こす
+#            （Cron-job.org は12件の上限のため相乗り。このリポジトリは公開＝実行時間の無料枠を使わない）
+# 【同梱】なし
+# 【宛先】全体チャンネル（既存Bot 12266491）。夜（21〜7時）と休診日は送らず、次の診療日の朝に1通にまとめる
+#        EUFY_STAFF_POST が 1 でないあいだは試運転＝全部を院長DMへ【試運転】付きで送る
+#        見張りが止まった・ロボがネットから外れた・スタッフで直せない故障は院長DM（失敗通知Bot 12789558）だけ
+# 【状態】前回までの様子（掃除の記録・知らせ済みの問題）は Actions のキャッシュで次の回へ引き継ぐ
+# 【試し】no_notify=true で何も送らない（文面はログに [試し・未送信]。成功した回のログは emit.sh が中身を伏せる）
+# ==========================================================
+name: お掃除ロボ見張り（101号室）
+
+on:
+  workflow_dispatch:
+    inputs:
+      no_notify:
+        description: '検証用：何も送らない（文面はログへ）: true/false'
+        required: false
+        default: 'false'
+
+concurrency:
+  group: eufy-watch
+  cancel-in-progress: false
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: runner
+      - uses: actions/checkout@v4
+        with:
+          repository: shin3578-oss/apotool-automation
+          token: ${{ secrets.APOTOOL_PAT }}
+          path: app
+          sparse-checkout: |
+            eufy_watch.py
+            lw_local.py
+            lw_notify.py
+            shime_monthly_report.py
+          sparse-checkout-cone-mode: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -q requests pyjwt cryptography
+      - name: 前回までの様子を読み込む
+        uses: actions/cache/restore@v4
+        with:
+          path: eufy_state
+          key: eufy-state-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: eufy-state-
+      - name: お掃除ロボを見る
+        id: watch
+        env:
+          EUFY_EMAIL:       ${{ secrets.EUFY_EMAIL }}
+          EUFY_PASSWORD:    ${{ secrets.EUFY_PASSWORD }}
+          LW_PRIVATE_KEY:   ${{ secrets.LW_PRIVATE_KEY }}
+          LW_CLIENT_SECRET: ${{ secrets.LW_CLIENT_SECRET }}
+          LW_DENTAL_CH:     ${{ secrets.LW_DENTAL_CH }}
+          MASK_NAMES:       ${{ secrets.MASK_NAMES }}
+          EUFY_STAFF_POST:  ${{ vars.EUFY_STAFF_POST }}
+          NO_NOTIFY:        ${{ inputs.no_notify == 'true' && '1' || '0' }}
+          EUFY_STATE:       ${{ github.workspace }}/eufy_state/state.json
+          EUFY_HANDLED:     ${{ runner.temp }}/fail_handled
+        run: |
+          mkdir -p eufy_state
+          set +e
+          python -u app/eufy_watch.py > /tmp/step.log 2>&1
+          code=$?
+          bash runner/emit.sh "$code" /tmp/step.log
+      # 予備の失敗通知：本体が「知らせた／わざと黙った」の印（fail_handled）を置かずに落ちたとき
+      # （読み込みの失敗・部品不足・LINEワークスへ送れない など）だけ、apotool の lw_notify.yml で失敗通知Botへ。
+      # 続くときは6時間に1回（最後に送った時刻を eufy_state/fallback_at に残し、キャッシュで引き継ぐ）
+      - name: 失敗通知（本体が知らせられなかったとき）
+        if: failure() && inputs.no_notify != 'true'
+        env:
+          YT_TRIGGER_PAT: ${{ secrets.YT_TRIGGER_PAT }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          if [ -f "$RUNNER_TEMP/fail_handled" ]; then echo "本体が受け持った失敗→予備は送らない"; exit 0; fi
+          mkdir -p eufy_state
+          now=$(date +%s); last=$(cat eufy_state/fallback_at 2>/dev/null || echo 0)
+          if [ $((now - last)) -lt 21600 ]; then echo "前の予備通知から6時間たっていない→送らない"; exit 0; fi
+          BODY=$(python3 -c 'import json,os;print(json.dumps({"ref":"main","inputs":{"message":"❌ お掃除ロボ見張り 失敗（本体が自分で知らせられませんでした）。AIに「お掃除ロボの見張りのログ見て」","bot_id":"12789558","run_url":os.environ["RUN_URL"]}}))')
+          curl -sf -X POST -H "Authorization: token $YT_TRIGGER_PAT" -H "Accept: application/vnd.github+json"             "https://api.github.com/repos/shin3578-oss/apotool-automation/actions/workflows/lw_notify.yml/dispatches" -d "$BODY"             && echo "$now" > eufy_state/fallback_at
+      - name: 次の回へ様子を引き継ぐ
+        if: always() && inputs.no_notify != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: eufy_state
+          key: eufy-state-${{ github.run_id }}-${{ github.run_attempt }}

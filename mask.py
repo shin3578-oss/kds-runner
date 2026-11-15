@@ -34,7 +34,8 @@ import sys
 # 医院として公開している連絡先や、GitHub が自分で出す文字は伏せない（読めないと不便なだけ）
 KEEP = re.compile(r"03-5739-1625|github|noreply|actions@|ovalcourtdental|worksmobile|googleapis")
 
-_JP = r"[一-龥ぁ-ゖァ-ヶー]"
+# 豈-﫿＝互換漢字（「山﨑」の﨑 U+FA11 など。2026-11-15 に範囲外と分かって足した）
+_JP = r"[一-龥豈-﫿々ぁ-ゖァ-ヶー]"
 _NAME = r"(?:" + _JP + r"{1,6}[ 　]{0,2}){1,3}"
 
 RULES = [
@@ -63,7 +64,7 @@ def _build_names():
     if names:
         return re.compile("|".join(re.escape(n) for n in names)), False
     # 設定漏れ。読みにくくても漏らさないほうを取る＝漢字2文字以上を全部伏せる
-    return re.compile(r"[一-龥]+"), True
+    return re.compile(r"[一-龥豈-﫿]+"), True
 
 
 NAMES_RX, FALLBACK = _build_names()
